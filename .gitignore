@@ -47,6 +47,8 @@ yarn-error.log*
 
 # Next.js
 .next/
+.next-build/
+.next-production/
 out/
 *.tsbuildinfo
 
@@ -75,3 +77,10 @@ Desktop.ini
 
 # Coverage
 coverage/
+
+# Celery
+celerybeat-schedule
+
+# Temporary directories
+tmp/
+home/
