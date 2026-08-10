@@ -83,4 +83,4 @@ celerybeat-schedule
 
 # Temporary directories
 tmp/
-home/
+frontend/test-results/
