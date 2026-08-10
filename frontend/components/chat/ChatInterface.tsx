@@ -612,11 +612,18 @@ export function ChatInterface() {
     }
   }, [messages, handleSend]);
 
-  const handleNewConversation = () => {
-    setActiveConversationId(null);
-    setMessages([]);
-    setStreamError(null);
-  };
+  const handleNewConversation = useCallback(async () => {
+    try {
+      const newConversation = await aiApi.createConversation({ title: "New Conversation" });
+      setActiveConversationId(newConversation.id);
+      setMessages([]);
+      setStreamError(null);
+      queryClient.invalidateQueries({ queryKey: ["ai-conversations"] });
+    } catch (error) {
+      console.error("Failed to create conversation:", error);
+      setStreamError("Failed to create new conversation");
+    }
+  }, [queryClient]);
 
   const handleSelectConversation = (id: string) => {
     setActiveConversationId(id);
@@ -635,11 +642,11 @@ export function ChatInterface() {
   const displayMessages = [...allMessages, ...messages.filter(m => m.id.startsWith("temp-"))];
 
   return (
-    <div className="flex h-full bg-slate-50 dark:bg-slate-950">
+    <div className="flex h-full w-full min-w-0 bg-slate-50 dark:bg-slate-950">
       {/* Sidebar */}
       <aside className={cn(
-        "w-80 flex flex-col border-r border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 transition-all duration-200",
-        isSidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
+        "w-80 flex-shrink-0 flex flex-col border-r border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 transition-all duration-200 lg:w-80",
+        isSidebarOpen ? "translate-x-0" : "-translate-x-full"
       )}>
         <ConversationList
           conversations={conversations}
@@ -653,7 +660,17 @@ export function ChatInterface() {
 
       {/* Main Chat Area */}
       <main className="flex-1 flex flex-col min-w-0">
-        <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Header with mobile sidebar toggle */}
+        <header className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 lg:hidden">
+          <Button variant="ghost" size="sm" onClick={() => setIsSidebarOpen(!isSidebarOpen)} aria-label="Toggle conversations">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </Button>
+          <h1 className="text-lg font-semibold text-slate-900 dark:text-slate-100">GROK</h1>
+          <div className="w-10" />
+        </header>
+        <div className="flex-1 flex flex-col overflow-hidden min-w-0">
           <MessageList
             messages={displayMessages}
             isLoading={messagesLoading && messages.length === 0}

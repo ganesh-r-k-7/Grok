@@ -82,7 +82,6 @@ services:
     command: npm run dev
     volumes:
       - ./frontend:/app
-      - /app/.next
     ports:
       - "3000:3000"
     environment:

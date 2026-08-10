@@ -38,7 +38,7 @@ class AIService:
     @property
     def provider(self) -> AIProvider:
         if self._provider is None:
-            self._provider = get_provider()
+            self._provider = get_provider(settings.AI_PROVIDER)
         return self._provider
 
     async def create_conversation(self, user_id: UUID, title: str = "New Conversation") -> Conversation:

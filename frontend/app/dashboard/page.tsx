@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { format, formatDistanceToNow, isPast } from "date-fns";
 import { useQuery } from "@tanstack/react-query";
-import { tasksApi, Task, TaskStatus } from "@/lib/api";
+import { tasksApi, Task } from "@/lib/api";
 import { ChatInterface } from "@/components/chat";
 
 const mockEvents = [
@@ -281,12 +281,10 @@ export default function DashboardPage() {
       <div className="space-y-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6"><TimeDate /><NextEvent /></div>
-          <div className="space-y-6"><ChatInterface /><QuickActions /></div>
-        </div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 space-y-6"><TodaySchedule /><TaskList title="Pending Tasks" tasks={[]} emptyMessage="Loading..." /></div>
+          <div className="space-y-6"><TodaySchedule /><TaskList title="Pending Tasks" tasks={[]} emptyMessage="Loading..." /></div>
           <div className="space-y-6"><TaskList title="Overdue Tasks (0)" tasks={[]} emptyMessage="Loading..." showOverdueOnly /><EmailList title="Important Emails" emails={[]} /><EmailList title="Action Required" emails={[]} /></div>
         </div>
+        <div className="h-[600px] lg:h-[700px] min-h-[500px]"><ChatInterface /></div>
       </div>
     );
   }
@@ -296,12 +294,10 @@ export default function DashboardPage() {
       <div className="space-y-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6"><TimeDate /><NextEvent /></div>
-          <div className="space-y-6"><ChatInterface /><QuickActions /></div>
-        </div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 space-y-6"><TodaySchedule /><TaskList title="Pending Tasks" tasks={[]} emptyMessage="Failed to load tasks" /></div>
+          <div className="space-y-6"><TodaySchedule /><TaskList title="Pending Tasks" tasks={[]} emptyMessage="Failed to load tasks" /></div>
           <div className="space-y-6"><TaskList title="Overdue Tasks (0)" tasks={[]} emptyMessage="Failed to load tasks" showOverdueOnly /><EmailList title="Important Emails" emails={importantEmails} /><EmailList title="Action Required" emails={mockEmails.filter((e) => e.subject.includes("Action"))} /></div>
         </div>
+        <div className="h-[600px] lg:h-[700px] min-h-[500px]"><ChatInterface /></div>
         <div className="card p-6 text-center text-red-600 dark:text-red-400">
           Failed to load tasks: {tasksError instanceof Error ? tasksError.message : "Unknown error"}
           <button onClick={() => refetchTasks()} className="btn-primary mt-4">Retry</button>
@@ -314,13 +310,7 @@ export default function DashboardPage() {
     <div className="space-y-6">
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6"><TimeDate /><NextEvent /></div>
-        <div className="space-y-6"><ChatInterface /><QuickActions /></div>
-      </div>
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
-          <TodaySchedule />
-          <TaskList title="Pending Tasks" tasks={pendingTasks.slice(0, 5)} emptyMessage="No pending tasks" />
-        </div>
+        <div className="space-y-6"><TodaySchedule /><TaskList title="Pending Tasks" tasks={pendingTasks.slice(0, 5)} emptyMessage="No pending tasks" /></div>
         <div className="space-y-6">
           {overdueTasks.length > 0 && (
             <TaskList title={`Overdue Tasks (${overdueTasks.length})`} tasks={overdueTasks.slice(0, 3)} emptyMessage="No overdue tasks" showOverdueOnly />
@@ -329,6 +319,7 @@ export default function DashboardPage() {
           <EmailList title="Action Required" emails={mockEmails.filter((e) => e.subject.includes("Action"))} />
         </div>
       </div>
+      <div className="h-[600px] lg:h-[700px] min-h-[500px]"><ChatInterface /></div>
     </div>
   );
 }
