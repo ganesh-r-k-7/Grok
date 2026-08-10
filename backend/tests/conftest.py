@@ -3,7 +3,7 @@ import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import StaticPool
 from sqlalchemy import text
 
 from app.main import create_app
@@ -11,9 +11,11 @@ from app.database import get_db
 from app.models import Base
 from app.config import Settings, get_settings
 
-# Test settings - use environment variable for database URL, fallback to localhost for local development
-TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL", "postgresql+asyncpg://grok:grok@localhost:5432/grok_test")
-TEST_POSTGRES_URL = os.getenv("TEST_POSTGRES_URL", "postgresql+asyncpg://grok:grok@localhost:5432/postgres")
+# Import test dialect to register custom SQLite dialect
+import tests.test_dialect  # noqa: F401
+
+# Test settings - use custom SQLite dialect in-memory for testing
+TEST_DATABASE_URL = "sqlite+custom:///:memory:"
 
 
 @pytest.fixture(autouse=True)
@@ -33,24 +35,11 @@ def override_cookie_settings():
 
 @pytest.fixture(scope="session")
 async def test_engine():
-    # First create the test database
-    admin_engine = create_async_engine(TEST_POSTGRES_URL, isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        # Terminate existing connections to the test database
-        await conn.execute(text("""
-            SELECT pg_terminate_backend(pid)
-            FROM pg_stat_activity
-            WHERE datname = 'grok_test' AND pid <> pg_backend_pid()
-        """))
-        # Drop and create the test database
-        await conn.execute(text("DROP DATABASE IF EXISTS grok_test"))
-        await conn.execute(text("CREATE DATABASE grok_test"))
-    await admin_engine.dispose()
-
-    # Now create the test engine
+    # Create the test engine with SQLite in-memory
     engine = create_async_engine(
         TEST_DATABASE_URL,
-        poolclass=NullPool,
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
         echo=False,
     )
     async with engine.begin() as conn:
@@ -59,17 +48,6 @@ async def test_engine():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
     await engine.dispose()
-
-    # Clean up test database
-    admin_engine = create_async_engine(TEST_POSTGRES_URL, isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        await conn.execute(text("""
-            SELECT pg_terminate_backend(pid)
-            FROM pg_stat_activity
-            WHERE datname = 'grok_test' AND pid <> pg_backend_pid()
-        """))
-        await conn.execute(text("DROP DATABASE IF EXISTS grok_test"))
-    await admin_engine.dispose()
 
 
 @pytest.fixture

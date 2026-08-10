@@ -160,3 +160,93 @@ export const tasksApi = {
 
   delete: (id: string) => api.delete<void>(`/tasks/${id}`),
 };
+
+// AI types
+export type ConversationRole = "user" | "assistant" | "system" | "tool";
+
+export interface Conversation {
+  id: string;
+  user_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationListResponse {
+  conversations: Conversation[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export interface ConversationCreate {
+  title: string;
+}
+
+export interface ConversationUpdate {
+  title: string;
+}
+
+export interface Message {
+  id: string;
+  conversation_id: string;
+  role: ConversationRole;
+  content: string;
+  created_at: string;
+}
+
+export interface ChatRequest {
+  message: string;
+  conversation_id?: string;
+}
+
+export interface MessageResponse {
+  id: string;
+  conversation_id: string;
+  role: ConversationRole;
+  content: string;
+  created_at: string;
+}
+
+export interface ChatResponse {
+  conversation_id: string;
+  message: MessageResponse;
+}
+
+// AI API functions
+export const aiApi = {
+  chat: (data: ChatRequest) => api.post<ChatResponse>("/ai/chat", data),
+
+  listConversations: (params?: { page?: number; page_size?: number }) => {
+    const searchParams = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) {
+          searchParams.set(key, String(value));
+        }
+      });
+    }
+    const query = searchParams.toString();
+    return api.get<{ conversations: Conversation[]; total: number; page: number; page_size: number; total_pages: number }>(
+      `/ai/conversations${query ? `?${query}` : ""}`
+    );
+  },
+
+  createConversation: (data: ConversationCreate) => api.post<Conversation>("/ai/conversations", data),
+
+  getConversation: (id: string) => api.get<Conversation>(`/ai/conversations/${id}`),
+
+  updateConversation: (id: string, data: ConversationUpdate) => api.patch<Conversation>(`/ai/conversations/${id}`, data),
+
+  deleteConversation: (id: string) => api.delete<void>(`/ai/conversations/${id}`),
+
+  getMessages: (conversationId: string, limit?: number) => {
+    const searchParams = new URLSearchParams();
+    if (limit) {
+      searchParams.set("limit", String(limit));
+    }
+    const query = searchParams.toString();
+    return api.get<{ messages: Message[] }>(`/ai/conversations/${conversationId}/messages${query ? `?${query}` : ""}`);
+  },
+};

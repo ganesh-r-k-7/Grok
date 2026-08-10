@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { format, formatDistanceToNow, isPast } from "date-fns";
 import { useQuery } from "@tanstack/react-query";
 import { tasksApi, Task, TaskStatus } from "@/lib/api";
+import { ChatInterface } from "@/components/chat";
 
 const mockEvents = [
   { id: "1", title: "Team Standup", start: "2026-08-08T09:00:00-07:00", end: "2026-08-08T09:30:00-07:00", location: "Zoom" },
@@ -280,7 +281,7 @@ export default function DashboardPage() {
       <div className="space-y-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6"><TimeDate /><NextEvent /></div>
-          <div className="space-y-6"><AIRecommendation pendingCount={0} overdueCount={0} /><QuickActions /></div>
+          <div className="space-y-6"><ChatInterface /><QuickActions /></div>
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6"><TodaySchedule /><TaskList title="Pending Tasks" tasks={[]} emptyMessage="Loading..." /></div>
@@ -295,7 +296,7 @@ export default function DashboardPage() {
       <div className="space-y-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6"><TimeDate /><NextEvent /></div>
-          <div className="space-y-6"><AIRecommendation pendingCount={0} overdueCount={0} /><QuickActions /></div>
+          <div className="space-y-6"><ChatInterface /><QuickActions /></div>
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6"><TodaySchedule /><TaskList title="Pending Tasks" tasks={[]} emptyMessage="Failed to load tasks" /></div>
@@ -313,7 +314,7 @@ export default function DashboardPage() {
     <div className="space-y-6">
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6"><TimeDate /><NextEvent /></div>
-        <div className="space-y-6"><AIRecommendation pendingCount={pendingTasks.length} overdueCount={overdueTasks.length} /><QuickActions /></div>
+        <div className="space-y-6"><ChatInterface /><QuickActions /></div>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">

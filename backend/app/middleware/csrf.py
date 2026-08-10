@@ -25,6 +25,7 @@ CSRF_EXEMPT_PATHS = {
 CSRF_EXEMPT_PREFIXES = (
     "/api/v1/tasks",
     "/api/v1/user",
+    "/api/v1/ai",
 )
 
 

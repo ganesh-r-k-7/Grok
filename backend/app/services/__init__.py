@@ -8,6 +8,8 @@ from app.services.sync import SyncService
 from app.services.gmail import GmailService
 from app.services.calendar import CalendarService
 from app.services.tasks import TasksService
+from app.services.ai_service import AIService
+from app.services.task_tools import TaskTools
 
 __all__ = [
     "EncryptionService",
@@ -26,4 +28,6 @@ __all__ = [
     "GmailService",
     "CalendarService",
     "TasksService",
+    "AIService",
+    "TaskTools",
 ]
