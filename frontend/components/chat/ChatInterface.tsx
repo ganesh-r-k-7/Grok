@@ -2,11 +2,12 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { formatDistanceToNow } from "date-fns";
-import { aiApi, Conversation, Message, ConversationRole, ChatResponse } from "@/lib/api";
+import { aiApi, Conversation, Message, ConversationRole, StreamChunk } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
+import { marked } from "marked";
 
 interface ConversationListProps {
   conversations: Conversation[];
@@ -117,8 +118,29 @@ export function ConversationList({
   );
 }
 
+interface StreamingMessage {
+  id: string;
+  role: ConversationRole;
+  content: string;
+  isStreaming: boolean;
+  toolCalls?: Array<{
+    id: string;
+    name: string;
+    arguments: string;
+  }>;
+  toolResults?: Array<any>;
+  error?: string;
+  created_at?: string;
+}
+
+type DisplayMessage = Message | StreamingMessage;
+
+function isStreamingMessage(msg: DisplayMessage): msg is StreamingMessage {
+  return "isStreaming" in msg;
+}
+
 interface MessageListProps {
-  messages: Message[];
+  messages: (Message | StreamingMessage)[];
   isLoading: boolean;
 }
 
@@ -166,14 +188,18 @@ export function MessageList({ messages, isLoading }: MessageListProps) {
   );
 }
 
-interface MessageBubbleProps {
-  message: Message;
+function renderMarkdown(content: string) {
+  return { __html: marked.parse(content, { async: false }) as string };
 }
 
-function MessageBubble({ message }: MessageBubbleProps) {
+function MessageBubble({ message }: { message: DisplayMessage }) {
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
   const isTool = message.role === "tool";
+  const isStreaming = isStreamingMessage(message) && message.isStreaming;
+  const toolCalls = isStreamingMessage(message) ? message.toolCalls : undefined;
+  const toolResults = isStreamingMessage(message) ? message.toolResults : undefined;
+  const error = isStreamingMessage(message) ? message.error : undefined;
 
   return (
     <div className={cn("flex gap-3", isUser && "flex-row-reverse")}>
@@ -201,10 +227,38 @@ function MessageBubble({ message }: MessageBubbleProps) {
             ? "bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-200 rounded-tl-none"
             : "bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-slate-100 rounded-tl-none"
         )}>
-          <p className="whitespace-pre-wrap">{message.content}</p>
+          {isAssistant && !isUser ? (
+            <div dangerouslySetInnerHTML={renderMarkdown(message.content)} />
+          ) : (
+            <p className="whitespace-pre-wrap">{message.content}</p>
+          )}
+          {isStreaming && <span className="animate-pulse">▌</span>}
         </div>
+
+        {toolCalls && toolCalls.length > 0 && (
+          <div className="mt-2 space-y-1">
+            {toolCalls.map((tc) => (
+              <ToolCallBadge key={tc.id} name={tc.name} arguments={tc.arguments} />
+            ))}
+          </div>
+        )}
+
+        {toolResults && toolResults.length > 0 && (
+          <div className="mt-2 space-y-1">
+            {toolResults.map((tr: any, idx: number) => (
+              <ToolResultBadge key={idx} result={tr} />
+            ))}
+          </div>
+        )}
+
+        {error && (
+          <div className="mt-2 p-2 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 text-xs rounded">
+            {error}
+          </div>
+        )}
+
         <p className={cn("mt-1 text-xs", isUser ? "text-slate-400" : "text-slate-500 dark:text-slate-400")}>
-          {formatDistanceToNow(new Date(message.created_at), { addSuffix: true })}
+          {"created_at" in message && message.created_at ? formatDistanceToNow(new Date(message.created_at), { addSuffix: true }) : "Just now"}
         </p>
       </div>
 
@@ -219,13 +273,91 @@ function MessageBubble({ message }: MessageBubbleProps) {
   );
 }
 
+function ToolCallBadge({ name, arguments: args }: { name: string; arguments: string }) {
+  let displayArgs = "";
+  try {
+    const parsed = JSON.parse(args);
+    displayArgs = Object.entries(parsed).map(([k, v]) => `${k}: ${String(v)}`).join(", ");
+  } catch {
+    displayArgs = args;
+  }
+
+  return (
+    <div className="inline-flex items-center gap-1.5 px-2 py-1 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs rounded-full">
+      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+      </svg>
+      <span>{name}</span>
+      {displayArgs && <span className="opacity-70">{displayArgs}</span>}
+    </div>
+  );
+}
+
+function ToolResultBadge({ result }: { result: any }) {
+  const isSuccess = result.success !== false;
+
+  if (result.task) {
+    return (
+      <div className={cn(
+        "inline-flex items-center gap-1.5 px-2 py-1 text-xs rounded-full",
+        isSuccess ? "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300" : "bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300"
+      )}>
+        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          {isSuccess ? (
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          ) : (
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          )}
+        </svg>
+        <span>Task {isSuccess ? "created" : "failed"}: {result.task.title}</span>
+      </div>
+    );
+  }
+
+  if (result.tasks) {
+    return (
+      <div className={cn(
+        "inline-flex items-center gap-1.5 px-2 py-1 text-xs rounded-full",
+        isSuccess ? "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300" : "bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300"
+      )}>
+        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+        </svg>
+        <span>{result.total} task(s) found</span>
+      </div>
+    );
+  }
+
+  if (result.message) {
+    return (
+      <div className={cn(
+        "inline-flex items-center gap-1.5 px-2 py-1 text-xs rounded-full",
+        isSuccess ? "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300" : "bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300"
+      )}>
+        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          {isSuccess ? (
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          ) : (
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          )}
+        </svg>
+        <span>{result.message}</span>
+      </div>
+    );
+  }
+
+  return null;
+}
+
 interface ComposerProps {
   onSend: (message: string) => void;
+  onStop: () => void;
   isLoading: boolean;
   disabled?: boolean;
 }
 
-export function Composer({ onSend, isLoading, disabled }: ComposerProps) {
+export function Composer({ onSend, onStop, isLoading, disabled }: ComposerProps) {
   const [message, setMessage] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -234,7 +366,6 @@ export function Composer({ onSend, isLoading, disabled }: ComposerProps) {
     if (message.trim() && !isLoading) {
       onSend(message.trim());
       setMessage("");
-      // Reset textarea height
       if (textareaRef.current) {
         textareaRef.current.style.height = "auto";
       }
@@ -256,7 +387,6 @@ export function Composer({ onSend, isLoading, disabled }: ComposerProps) {
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setMessage(e.target.value);
-    // Auto-resize textarea
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
       textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
@@ -271,30 +401,37 @@ export function Composer({ onSend, isLoading, disabled }: ComposerProps) {
           value={message}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
-          placeholder="Message GROK... (Shift+Enter for new line)"
+          placeholder={isLoading ? "Generating response..." : "Message GROK... (Shift+Enter for new line)"}
           disabled={isLoading || disabled}
           rows={1}
           className="flex-1 resize-none p-3 pr-10 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:opacity-50"
           style={{ minHeight: "44px", maxHeight: "200px" }}
         />
-        <Button
-          type="submit"
-          variant="primary"
-          size="md"
-          disabled={isLoading || !message.trim() || disabled}
-          className="flex-shrink-0 h-11"
-        >
-          {isLoading ? (
-            <svg className="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+        {isLoading ? (
+          <Button
+            type="button"
+            variant="secondary"
+            size="md"
+            onClick={onStop}
+            className="flex-shrink-0 h-11"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
             </svg>
-          ) : (
+          </Button>
+        ) : (
+          <Button
+            type="submit"
+            variant="primary"
+            size="md"
+            disabled={!message.trim() || disabled}
+            className="flex-shrink-0 h-11"
+          >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
             </svg>
-          )}
-        </Button>
+          </Button>
+        )}
       </div>
       <p className="text-xs text-slate-400 dark:text-slate-500 mt-2 text-center">
         Press Enter to send, Shift+Enter for new line
@@ -307,9 +444,11 @@ export function ChatInterface() {
   const queryClient = useQueryClient();
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<(Message | StreamingMessage)[]>([]);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
-  const [isSending, setIsSending] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Fetch conversations
   const { data: conversationsData, isLoading: conversationsLoading } = useQuery({
@@ -320,7 +459,7 @@ export function ChatInterface() {
   const conversations = conversationsData?.conversations || [];
 
   // Fetch messages for active conversation
-const { data: messagesData, isLoading: messagesLoading, refetch: refetchMessages } = useQuery({
+  const { data: messagesData, isLoading: messagesLoading, refetch: refetchMessages } = useQuery({
     queryKey: ["ai-conversation-messages", activeConversationId],
     queryFn: () => aiApi.getMessages(activeConversationId!),
     enabled: !!activeConversationId,
@@ -328,54 +467,172 @@ const { data: messagesData, isLoading: messagesLoading, refetch: refetchMessages
 
   const allMessages = messagesData?.messages || [];
 
-  const chatMutation = useMutation({
-    mutationFn: ({ message, conversationId }: { message: string; conversationId?: string }) =>
-      aiApi.chat({ message, conversation_id: conversationId }),
-    onMutate: async ({ message, conversationId }) => {
-      setIsSending(true);
-      // Optimistically add user message
-      const tempMessage: Message = {
-        id: `temp-${Date.now()}`,
-        conversation_id: conversationId || "",
-        role: "user",
-        content: message,
-        created_at: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, tempMessage]);
-    },
-    onSuccess: (data) => {
-      // Invalidate messages query to fetch updated messages
-      queryClient.invalidateQueries({ queryKey: ["ai-conversation-messages", data.conversation_id] });
+  const handleSend = useCallback(async (message: string) => {
+    if (!activeConversationId && !message.trim()) return;
+
+    setIsStreaming(true);
+    setStreamError(null);
+
+    // Optimistically add user message
+    const tempUserMessage: StreamingMessage = {
+      id: `temp-user-${Date.now()}`,
+      role: "user",
+      content: message,
+      isStreaming: false,
+    };
+    setMessages((prev) => [...prev, tempUserMessage]);
+
+    // Create placeholder for streaming assistant message
+    const assistantMessageId = `temp-assistant-${Date.now()}`;
+    const assistantMessage: StreamingMessage = {
+      id: assistantMessageId,
+      role: "assistant",
+      content: "",
+      isStreaming: true,
+      toolCalls: [],
+      toolResults: [],
+    };
+    setMessages((prev) => [...prev, assistantMessage]);
+
+    abortControllerRef.current = new AbortController();
+
+    try {
+      const response = await aiApi.chatStream({
+        message,
+        conversation_id: activeConversationId || undefined,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error: ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      if (!reader) throw new Error("No response body");
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6);
+            if (data === "[DONE]") continue;
+
+            try {
+              const chunk: StreamChunk = JSON.parse(data);
+
+              setMessages((prev) =>
+                prev.map((msg) => {
+                  if (msg.id !== assistantMessageId) return msg;
+                  if (!isStreamingMessage(msg)) return msg;
+
+                  const updated: StreamingMessage = { ...msg };
+
+                  if (chunk.type === "content" && chunk.content) {
+                    updated.content += chunk.content;
+                  } else if (chunk.type === "tool_call" && chunk.tool_call) {
+                    updated.toolCalls = [
+                      ...(updated.toolCalls || []),
+                      {
+                        id: chunk.tool_call.id,
+                        name: chunk.tool_call.function.name,
+                        arguments: chunk.tool_call.function.arguments,
+                      },
+                    ];
+                  } else if (chunk.type === "tool_result" && chunk.tool_result) {
+                    updated.toolResults = [
+                      ...(updated.toolResults || []),
+                      chunk.tool_result,
+                    ];
+                  } else if (chunk.type === "error" && chunk.error) {
+                    updated.error = chunk.error;
+                    updated.isStreaming = false;
+                  } else if (chunk.type === "done") {
+                    updated.isStreaming = false;
+                    if (chunk.conversation_id) {
+                      updated.id = chunk.conversation_id;
+                    }
+                  }
+
+                  return updated;
+                })
+              );
+            } catch (e) {
+              // Ignore parse errors
+            }
+          }
+        }
+      }
+
+      // After streaming completes, invalidate queries to refresh
+      queryClient.invalidateQueries({ queryKey: ["ai-conversation-messages", activeConversationId || ""] });
       queryClient.invalidateQueries({ queryKey: ["ai-conversations"] });
-    },
-    onError: (error) => {
-      console.error("Chat error:", error);
-    },
-    onSettled: () => {
-      setIsSending(false);
-    },
-  });
-  const handleSend = (message: string) => {
-    chatMutation.mutate({ message, conversationId: activeConversationId || undefined });
-  };
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to send message";
+      setStreamError(errorMessage);
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === assistantMessageId
+            ? { ...msg, error: errorMessage, isStreaming: false }
+            : msg
+        )
+      );
+    } finally {
+      setIsStreaming(false);
+    }
+  }, [activeConversationId, queryClient]);
+
+  const handleStop = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    setIsStreaming(false);
+    // Mark the streaming message as stopped
+    setMessages((prev) =>
+      prev.map((msg) =>
+        isStreamingMessage(msg) && msg.isStreaming ? { ...msg, isStreaming: false, error: "Stopped by user" } : msg
+      )
+    );
+  }, []);
+
+  const handleRetry = useCallback((messageId: string) => {
+    const message = messages.find((m) => m.id === messageId);
+    if (message && message.role === "user") {
+      // Remove the failed assistant response and retry
+      setMessages((prev) => prev.filter((m) => m.id !== messageId && m.role !== "assistant"));
+      handleSend(message.content);
+    }
+  }, [messages, handleSend]);
 
   const handleNewConversation = () => {
     setActiveConversationId(null);
     setMessages([]);
+    setStreamError(null);
   };
 
   const handleSelectConversation = (id: string) => {
     setActiveConversationId(id);
+    setStreamError(null);
   };
 
   const handleDeleteConversation = (id: string) => {
-    // In a real implementation, call delete API
     if (activeConversationId === id) {
       setActiveConversationId(null);
       setMessages([]);
     }
     queryClient.invalidateQueries({ queryKey: ["ai-conversations"] });
   };
+
+  // Merge fetched messages with local streaming messages
+  const displayMessages = [...allMessages, ...messages.filter(m => m.id.startsWith("temp-"))];
 
   return (
     <div className="flex h-full bg-slate-50 dark:bg-slate-950">
@@ -397,13 +654,14 @@ const { data: messagesData, isLoading: messagesLoading, refetch: refetchMessages
       {/* Main Chat Area */}
       <main className="flex-1 flex flex-col min-w-0">
         <div className="flex-1 flex flex-col overflow-hidden">
-<MessageList
-            messages={allMessages}
-            isLoading={messagesLoading}
+          <MessageList
+            messages={displayMessages}
+            isLoading={messagesLoading && messages.length === 0}
           />
           <Composer
             onSend={handleSend}
-            isLoading={isSending}
+            onStop={handleStop}
+            isLoading={isStreaming}
             disabled={!activeConversationId}
           />
         </div>

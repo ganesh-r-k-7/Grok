@@ -214,9 +214,48 @@ export interface ChatResponse {
   message: MessageResponse;
 }
 
+// Streaming types
+export interface StreamChunk {
+  type: "content" | "tool_call" | "tool_result" | "done" | "error";
+  content?: string;
+  tool_call?: {
+    id: string;
+    type: "function";
+    function: {
+      name: string;
+      arguments: string;
+    };
+  };
+  tool_result?: {
+    success: boolean;
+    task?: any;
+    tasks?: any[];
+    total?: number;
+    message?: string;
+    error?: string;
+  };
+  error?: string;
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+  };
+  conversation_id?: string;
+}
+
 // AI API functions
 export const aiApi = {
   chat: (data: ChatRequest) => api.post<ChatResponse>("/ai/chat", data),
+
+  chatStream: (data: ChatRequest) => {
+    return fetch(`${API_BASE}/api/v1/ai/chat/stream`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      credentials: "include",
+      body: JSON.stringify(data),
+    });
+  },
 
   listConversations: (params?: { page?: number; page_size?: number }) => {
     const searchParams = new URLSearchParams();

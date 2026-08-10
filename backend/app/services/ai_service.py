@@ -1,8 +1,9 @@
 """AI Service for conversation management."""
 
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, AsyncGenerator
 from uuid import UUID
+import json
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models.conversation import Conversation, Message, ConversationRole
 from app.models.user import User
-from app.services.ai_providers.base import AIProvider, ChatMessage, ToolDefinition
+from app.services.ai_providers.base import AIProvider, ChatMessage, ToolDefinition, ChatChunk
 from app.services.ai_providers import get_provider
 from app.services.task_tools import TaskTools
 from app.utils.errors import NotFoundError, ForbiddenError
@@ -159,13 +160,59 @@ class AIService:
 
         return context
 
+    async def _execute_tool_call(self, task_tools: TaskTools, tool_call: dict) -> dict:
+        """Execute a single tool call and return the result."""
+        tool_name = tool_call.get("function", {}).get("name")
+        if not tool_name:
+            return {"success": False, "error": "Missing tool name"}
+
+        try:
+            args = json.loads(tool_call.get("function", {}).get("arguments", "{}"))
+        except json.JSONDecodeError:
+            args = {}
+
+        result = await task_tools.execute_tool(tool_name, args)
+        return result
+
     async def chat(
         self,
         conversation_id: UUID,
         user: User,
         message: str,
     ) -> Message:
-        """Process a chat message and get AI response."""
+        """Process a chat message and get AI response (non-streaming)."""
+        # Get the final response by consuming the streaming generator
+        # Note: chat_stream adds the user message
+        full_response = ""
+        async for chunk in self.chat_stream(conversation_id, user, message):
+            if chunk.type == "content" and chunk.content:
+                full_response += chunk.content
+            elif chunk.type == "error":
+                # Return error message as response
+                full_response = f"I encountered an error: {chunk.error}"
+                break
+
+        # If no response was generated, provide a default
+        if not full_response:
+            full_response = "I'm ready to help! What would you like to do?"
+
+        # Add assistant message
+        assistant_message = await self.add_message(
+            conversation_id=conversation_id,
+            role=ConversationRole.ASSISTANT,
+            content=full_response,
+            user_id=user.id,
+        )
+
+        return assistant_message
+
+    async def chat_stream(
+        self,
+        conversation_id: UUID,
+        user: User,
+        message: str,
+    ) -> AsyncGenerator[ChatChunk, None]:
+        """Process a chat message and stream AI response with tool calling."""
         # Add user message
         await self.add_message(
             conversation_id=conversation_id,
@@ -186,44 +233,61 @@ class AIService:
         task_tools = TaskTools(self.db, user)
         tools = task_tools.get_tool_definitions()
 
-        # Get AI response with tool calling
-        full_response = ""
-        tool_calls_made = False
+        # Tool calling loop - feed results back to model
+        max_tool_rounds = 3
+        tool_round = 0
 
-        async for chunk in self.provider.stream_chat(
-            system_prompt=SYSTEM_PROMPT,
-            messages=context,
-            tools=[ToolDefinition(**t["function"]) for t in tools],
-            tool_choice="auto",
-            temperature=settings.AI_TEMPERATURE,
-            max_tokens=settings.AI_MAX_TOKENS,
-        ):
-            if chunk.type == "content" and chunk.content:
-                full_response += chunk.content
-            elif chunk.type == "tool_call":
-                tool_calls_made = True
-                # Execute tool
-                tool_name = chunk.tool_call.get("function", {}).get("name")
-                import json
-                try:
-                    args = json.loads(chunk.tool_call.get("function", {}).get("arguments", "{}"))
-                except json.JSONDecodeError:
-                    args = {}
+        while tool_round < max_tool_rounds:
+            tool_calls_in_round = []
+            full_response = ""
+            has_tool_calls = False
 
-                result = await task_tools.execute_tool(tool_name, args)
-                # For now, we just add the result as a tool message
-                # In a full implementation, we'd feed this back to the model
+            async for chunk in self.provider.stream_chat(
+                system_prompt=SYSTEM_PROMPT,
+                messages=context,
+                tools=[ToolDefinition(**t["function"]) for t in tools],
+                tool_choice="auto",
+                temperature=settings.AI_TEMPERATURE,
+                max_tokens=settings.AI_MAX_TOKENS,
+            ):
+                if chunk.type == "content" and chunk.content:
+                    full_response += chunk.content
+                    yield chunk
+                elif chunk.type == "tool_call":
+                    has_tool_calls = True
+                    tool_calls_in_round.append(chunk.tool_call)
+                    yield chunk
+                elif chunk.type == "error":
+                    yield chunk
+                    return
+                elif chunk.type == "done":
+                    yield chunk
 
-        # If no response was generated, provide a default
-        if not full_response:
-            full_response = "I'm ready to help! What would you like to do?"
+            # If no tool calls, we're done
+            if not has_tool_calls:
+                if not full_response:
+                    # Send a default response if nothing generated
+                    yield ChatChunk(type="content", content="I'm ready to help! What would you like to do?")
+                    yield ChatChunk(type="done")
+                break
 
-        # Add assistant message
-        assistant_message = await self.add_message(
-            conversation_id=conversation_id,
-            role=ConversationRole.ASSISTANT,
-            content=full_response,
-            user_id=user.id,
-        )
+            # Execute all tool calls from this round
+            for tool_call in tool_calls_in_round:
+                result = await self._execute_tool_call(task_tools, tool_call)
 
-        return assistant_message
+                # Add tool result to context for next round
+                tool_call_id = tool_call.get("id")
+                context.append(ChatMessage(
+                    role="tool",
+                    content=json.dumps(result),
+                    tool_call_id=tool_call_id,
+                ))
+
+                # Yield tool result for UI
+                yield ChatChunk(type="tool_result", tool_result=result)
+
+            tool_round += 1
+
+        # Save the final assistant message
+        # Note: The actual saving happens in the non-streaming chat() method
+        # or can be done by the caller consuming this stream

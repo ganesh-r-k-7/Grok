@@ -1,7 +1,9 @@
-"""Nemotron AI Provider - HTTP API implementation."""
+"""Nemotron AI Provider - OpenAI SDK implementation for NVIDIA NIM/TGI."""
 
-import httpx
 from typing import AsyncGenerator, List, Optional
+
+from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletionChunk
 
 from app.services.ai_providers.base import AIProvider, ChatMessage, ChatChunk, ToolDefinition
 from app.config import get_settings
@@ -10,26 +12,23 @@ settings = get_settings()
 
 
 class NemotronProvider(AIProvider):
-    """Nemotron provider via HTTP API (e.g., NVIDIA NIM, local TGI)."""
+    """Nemotron provider via OpenAI SDK (NVIDIA NIM, local TGI)."""
 
     def __init__(self):
         self._api_url = settings.NEMOTRON_API_URL
         self._api_key = settings.NEMOTRON_API_KEY
         self._model = settings.NEMOTRON_MODEL
-        self._client: Optional[httpx.AsyncClient] = None
+        self._client: Optional[AsyncOpenAI] = None
 
     @property
     def model_name(self) -> str:
         return self._model
 
-    async def _get_client(self) -> httpx.AsyncClient:
+    def _get_client(self) -> AsyncOpenAI:
         if self._client is None:
-            headers = {"Content-Type": "application/json"}
-            if self._api_key:
-                headers["Authorization"] = f"Bearer {self._api_key}"
-            self._client = httpx.AsyncClient(
+            self._client = AsyncOpenAI(
                 base_url=self._api_url,
-                headers=headers,
+                api_key=self._api_key or "dummy-key",
                 timeout=60.0,
             )
         return self._client
@@ -54,9 +53,9 @@ class NemotronProvider(AIProvider):
             )
             return
 
-        client = await self._get_client()
+        client = self._get_client()
 
-        # Convert to OpenAI-compatible format
+        # Convert to OpenAI format
         api_messages = [{"role": "system", "content": system_prompt}]
         for msg in messages:
             if msg.role == "tool":
@@ -83,43 +82,50 @@ class NemotronProvider(AIProvider):
             for t in tools
         ]
 
-        payload = {
-            "model": self._model,
-            "messages": api_messages,
-            "tools": api_tools if tools else None,
-            "tool_choice": tool_choice,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": True,
-        }
-
         try:
-            async with client.stream("POST", "/chat/completions", json=payload) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    data = line[6:]
-                    if data == "[DONE]":
-                        yield ChatChunk(type="done")
-                        return
-                    import json
-                    try:
-                        chunk = json.loads(data)
-                        delta = chunk.get("choices", [{}])[0].get("delta", {})
-                        if "content" in delta and delta["content"]:
-                            yield ChatChunk(type="content", content=delta["content"])
-                        if "tool_calls" in delta:
-                            for tc in delta["tool_calls"]:
-                                yield ChatChunk(type="tool_call", tool_call=tc)
-                    except json.JSONDecodeError:
-                        continue
-        except httpx.HTTPStatusError as e:
-            yield ChatChunk(type="error", error=f"API error: {e.response.status_code} - {e.response.text}")
+            stream = await client.chat.completions.create(
+                model=self._model,
+                messages=api_messages,
+                tools=api_tools if tools else None,
+                tool_choice=tool_choice if tools else None,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stream=True,
+                stream_options={"include_usage": True},
+            )
+
+            last_chunk = None
+            async for chunk in stream:
+                last_chunk = chunk
+                delta = chunk.choices[0].delta if chunk.choices else None
+                if delta:
+                    if delta.content:
+                        yield ChatChunk(type="content", content=delta.content)
+                    if delta.tool_calls:
+                        for tc in delta.tool_calls:
+                            # Convert OpenAI tool call to dict
+                            tool_call_dict = {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments,
+                                },
+                            }
+                            yield ChatChunk(type="tool_call", tool_call=tool_call_dict)
+
+            # Send done chunk with usage if available
+            usage = last_chunk.usage if last_chunk and last_chunk.usage else None
+            yield ChatChunk(type="done", usage={
+                "prompt_tokens": usage.prompt_tokens if usage else 0,
+                "completion_tokens": usage.completion_tokens if usage else 0,
+                "total_tokens": usage.total_tokens if usage else 0,
+            })
+
         except Exception as e:
             yield ChatChunk(type="error", error=f"Nemotron provider error: {str(e)}")
 
     async def close(self):
         if self._client:
-            await self._client.aclose()
+            await self._client.close()
             self._client = None

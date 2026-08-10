@@ -1,8 +1,10 @@
 from datetime import datetime
 from typing import Optional
 from uuid import UUID
+import json
 
 from fastapi import APIRouter, Depends, Query, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +13,7 @@ from app.api.deps import get_current_user
 from app.models.user import User
 from app.models.conversation import Conversation, Message, ConversationRole
 from app.services.ai_service import AIService
+from app.services.ai_providers.base import ChatChunk
 from app.utils.errors import NotFoundError, ForbiddenError
 
 router = APIRouter(tags=["AI"])
@@ -181,3 +184,83 @@ async def delete_conversation(
     """Delete a conversation."""
     ai_service = AIService(db)
     await ai_service.delete_conversation(conversation_id, user.id)
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    request: ChatRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send a message to the AI and get a streaming response."""
+    ai_service = AIService(db)
+
+    # Get or create conversation
+    if request.conversation_id:
+        conversation = await ai_service.get_conversation(request.conversation_id, user.id)
+    else:
+        # Create new conversation with first message as title basis
+        conversation = await ai_service.create_conversation(user.id)
+
+    async def stream_generator():
+        full_response = ""
+        tool_results = []
+        provider_done_received = False
+
+        try:
+            async for chunk in ai_service.chat_stream(
+                conversation_id=conversation.id,
+                user=user,
+                message=request.message,
+            ):
+                # Format as SSE
+                data = {
+                    "type": chunk.type,
+                }
+                if chunk.content:
+                    data["content"] = chunk.content
+                    full_response += chunk.content
+                if chunk.tool_call:
+                    data["tool_call"] = chunk.tool_call
+                if chunk.tool_result:
+                    data["tool_result"] = chunk.tool_result
+                    tool_results.append(chunk.tool_result)
+                if chunk.error:
+                    data["error"] = chunk.error
+                if chunk.usage:
+                    data["usage"] = chunk.usage
+
+                yield f"data: {json.dumps(data)}\n\n"
+
+                # Check if done was sent by the provider
+                if chunk.type == "done":
+                    provider_done_received = True
+
+            # Save the assistant message after streaming completes
+            if full_response:
+                await ai_service.add_message(
+                    conversation_id=conversation.id,
+                    role=ConversationRole.ASSISTANT,
+                    content=full_response,
+                    user_id=user.id,
+                )
+
+            # Always send final done event with conversation ID
+            yield f"data: {json.dumps({'type': 'done', 'conversation_id': str(conversation.id)})}\n\n"
+
+        except Exception as e:
+            # Send error event
+            error_data = {"type": "error", "error": f"Stream error: {str(e)}"}
+            yield f"data: {json.dumps(error_data)}\n\n"
+            # Send done event to close stream
+            yield f"data: {json.dumps({'type': 'done', 'conversation_id': str(conversation.id)})}\n\n"
+
+    return StreamingResponse(
+        stream_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
