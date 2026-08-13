@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import List, Optional, AsyncGenerator
 from uuid import UUID
 import json
+import logging
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,11 +14,21 @@ from app.models.conversation import Conversation, Message, ConversationRole
 from app.models.user import User
 from app.services.ai_providers.base import AIProvider, ChatMessage, ToolDefinition, ChatChunk
 from app.services.ai_providers import get_provider
+from app.services.ai_providers.exceptions import (
+    AIProviderError,
+    AIProviderRateLimitError,
+    AIProviderTimeoutError,
+    AIProviderUnavailableError,
+    AIProviderAuthenticationError,
+    AIProviderBadRequestError,
+    is_retryable_error,
+)
 from app.services.task_tools import TaskTools
 from app.utils.errors import NotFoundError, ForbiddenError
 from app.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT = """You are GROK, a personal AI command center assistant.
@@ -173,6 +184,21 @@ class AIService:
 
         result = await task_tools.execute_tool(tool_name, args)
         return result
+
+    def _map_provider_error_to_http(self, error: AIProviderError) -> tuple[int, str, dict]:
+        """Map provider error to HTTP status code and error response."""
+        if isinstance(error, AIProviderRateLimitError):
+            return 429, "GROK is temporarily busy. Please try again shortly.", {"retry_after": error.retry_after}
+        elif isinstance(error, AIProviderTimeoutError):
+            return 504, "GROK took too long to respond. Please try again.", {}
+        elif isinstance(error, AIProviderUnavailableError):
+            return 503, "GROK is temporarily unavailable. Please try again.", {}
+        elif isinstance(error, AIProviderAuthenticationError):
+            return 502, "AI provider configuration error. Please contact support.", {}
+        elif isinstance(error, AIProviderBadRequestError):
+            return 502, "Invalid request to AI provider. Please try again.", {}
+        else:
+            return 502, "AI provider error. Please try again.", {}
 
     async def chat(
         self,

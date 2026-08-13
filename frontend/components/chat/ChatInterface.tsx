@@ -131,6 +131,9 @@ interface StreamingMessage {
   toolResults?: Array<any>;
   error?: string;
   created_at?: string;
+  // For retry functionality
+  isRetryable?: boolean;
+  retryAfter?: number;
 }
 
 type DisplayMessage = Message | StreamingMessage;
@@ -142,9 +145,10 @@ function isStreamingMessage(msg: DisplayMessage): msg is StreamingMessage {
 interface MessageListProps {
   messages: (Message | StreamingMessage)[];
   isLoading: boolean;
+  onRetry?: (messageId: string) => void;
 }
 
-export function MessageList({ messages, isLoading }: MessageListProps) {
+export function MessageList({ messages, isLoading, onRetry }: MessageListProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -181,7 +185,7 @@ export function MessageList({ messages, isLoading }: MessageListProps) {
   return (
     <div ref={containerRef} className="flex-1 overflow-y-auto p-4 space-y-4">
       {messages.map((message) => (
-        <MessageBubble key={message.id} message={message} />
+        <MessageBubble key={message.id} message={message} onRetry={onRetry} />
       ))}
       <div ref={messagesEndRef} />
     </div>
@@ -192,7 +196,7 @@ function renderMarkdown(content: string) {
   return { __html: marked.parse(content, { async: false }) as string };
 }
 
-function MessageBubble({ message }: { message: DisplayMessage }) {
+function MessageBubble({ message, onRetry }: { message: DisplayMessage; onRetry?: (messageId: string) => void }) {
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
   const isTool = message.role === "tool";
@@ -200,6 +204,29 @@ function MessageBubble({ message }: { message: DisplayMessage }) {
   const toolCalls = isStreamingMessage(message) ? message.toolCalls : undefined;
   const toolResults = isStreamingMessage(message) ? message.toolResults : undefined;
   const error = isStreamingMessage(message) ? message.error : undefined;
+  const isRetryable = isStreamingMessage(message) ? message.isRetryable : false;
+  const retryAfter = isStreamingMessage(message) ? message.retryAfter : undefined;
+
+  // Countdown state for retry-after
+  const [retryCountdown, setRetryCountdown] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (retryAfter && retryAfter > 0) {
+      setRetryCountdown(retryAfter);
+      const interval = setInterval(() => {
+        setRetryCountdown((prev) => {
+          if (prev === null || prev <= 1) {
+            clearInterval(interval);
+            return null;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      return () => clearInterval(interval);
+    } else {
+      setRetryCountdown(null);
+    }
+  }, [retryAfter]);
 
   return (
     <div className={cn("flex gap-3", isUser && "flex-row-reverse")}>
@@ -254,6 +281,19 @@ function MessageBubble({ message }: { message: DisplayMessage }) {
         {error && (
           <div className="mt-2 p-2 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 text-xs rounded">
             {error}
+            {isRetryable && onRetry && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-1"
+                onClick={() => onRetry(message.id)}
+                disabled={retryCountdown !== null}
+              >
+                {retryCountdown !== null
+                  ? `Retry in ${retryCountdown}s`
+                  : "Retry"}
+              </Button>
+            )}
           </div>
         )}
 
@@ -503,7 +543,34 @@ export function ChatInterface() {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error: ${response.status}`);
+        // Handle HTTP errors
+        let errorMessage = "Failed to send message";
+        let isRetryable = false;
+        let retryAfter: number | undefined;
+
+        if (response.status === 429) {
+          errorMessage = "GROK is temporarily busy. Please try again shortly.";
+          isRetryable = true;
+          const retryAfterHeader = response.headers.get("Retry-After");
+          if (retryAfterHeader) {
+            retryAfter = parseInt(retryAfterHeader, 10);
+          }
+        } else if (response.status === 503) {
+          errorMessage = "GROK is temporarily unavailable. Please try again.";
+          isRetryable = true;
+        } else if (response.status === 504) {
+          errorMessage = "GROK took too long to respond. Please try again.";
+          isRetryable = true;
+        } else if (response.status === 401 || response.status === 403) {
+          errorMessage = "Authentication error. Please log in again.";
+        } else if (response.status >= 500) {
+          errorMessage = "GROK is temporarily unavailable. Please try again.";
+          isRetryable = true;
+        } else {
+          errorMessage = `Error: ${response.status}`;
+        }
+
+        throw { message: errorMessage, isRetryable, retryAfter, status: response.status };
       }
 
       const reader = response.body?.getReader();
@@ -554,6 +621,10 @@ export function ChatInterface() {
                   } else if (chunk.type === "error" && chunk.error) {
                     updated.error = chunk.error;
                     updated.isStreaming = false;
+                    // Check if error is retryable based on provider error
+                    if (chunk.error.includes("rate limit") || chunk.error.includes("temporarily")) {
+                      updated.isRetryable = true;
+                    }
                   } else if (chunk.type === "done") {
                     updated.isStreaming = false;
                     if (chunk.conversation_id) {
@@ -576,12 +647,24 @@ export function ChatInterface() {
       queryClient.invalidateQueries({ queryKey: ["ai-conversations"] });
 
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Failed to send message";
+      let errorMessage = "Failed to send message";
+      let isRetryable = false;
+      let retryAfter: number | undefined;
+
+      if (typeof error === "object" && error !== null && "message" in error) {
+        // Our custom error object with retry info
+        errorMessage = (error as { message: string }).message;
+        isRetryable = (error as { isRetryable?: boolean }).isRetryable ?? false;
+        retryAfter = (error as { retryAfter?: number }).retryAfter;
+      } else if (error instanceof Error) {
+        errorMessage = error.message;
+      }
+
       setStreamError(errorMessage);
       setMessages((prev) =>
         prev.map((msg) =>
           msg.id === assistantMessageId
-            ? { ...msg, error: errorMessage, isStreaming: false }
+            ? { ...msg, error: errorMessage, isStreaming: false, isRetryable, retryAfter }
             : msg
         )
       );
@@ -674,6 +757,7 @@ export function ChatInterface() {
           <MessageList
             messages={displayMessages}
             isLoading={messagesLoading && messages.length === 0}
+            onRetry={handleRetry}
           />
           <Composer
             onSend={handleSend}

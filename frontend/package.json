@@ -39,6 +39,7 @@
     "@types/node": "20.12.*",
     "@types/react": "18.3.*",
     "@vitejs/plugin-react": "^6.0.5",
+    "@vitest/coverage-v8": "^1.5.3",
     "autoprefixer": "10.4.*",
     "eslint": "8.57.*",
     "eslint-config-next": "14.2.*",

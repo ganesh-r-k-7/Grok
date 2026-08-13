@@ -3,7 +3,7 @@ from typing import Optional
 from uuid import UUID
 import json
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, status, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,9 +14,12 @@ from app.models.user import User
 from app.models.conversation import Conversation, Message, ConversationRole
 from app.services.ai_service import AIService
 from app.services.ai_providers.base import ChatChunk
-from app.utils.errors import NotFoundError, ForbiddenError
+from app.services.ai_providers.exceptions import AIProviderError, is_retryable_error
+from app.utils.errors import NotFoundError, ForbiddenError, create_error_response
+from app.config import get_settings
 
 router = APIRouter(tags=["AI"])
+settings = get_settings()
 
 
 # Request/Response models

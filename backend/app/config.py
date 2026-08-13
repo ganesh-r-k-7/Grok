@@ -52,6 +52,12 @@ class Settings(BaseSettings):
     AI_TEMPERATURE: float = 0.3
     AI_MAX_TOKENS: int = 4096
 
+    # AI Provider Retry/Timeout Configuration
+    AI_MAX_RETRIES: int = 2
+    AI_RETRY_BASE_DELAY: float = 1.0
+    AI_RETRY_MAX_DELAY: float = 8.0
+    AI_REQUEST_TIMEOUT: float = 60.0
+
     # Celery
     CELERY_BROKER_URL: str = Field(default="redis://localhost:6379/0", pattern=r"^redis://")
     CELERY_RESULT_BACKEND: str = Field(default="redis://localhost:6379/0", pattern=r"^redis://")

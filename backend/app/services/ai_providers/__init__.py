@@ -1,8 +1,34 @@
 from app.services.ai_providers.base import AIProvider, ToolDefinition, ChatMessage, ChatChunk
 from app.services.ai_providers.mock import MockProvider
 from app.services.ai_providers.nemotron import NemotronProvider
+from app.services.ai_providers.exceptions import (
+    AIProviderError,
+    AIProviderRateLimitError,
+    AIProviderTimeoutError,
+    AIProviderUnavailableError,
+    AIProviderAuthenticationError,
+    AIProviderBadRequestError,
+    is_retryable_error,
+    map_provider_exception,
+)
 
-__all__ = ["AIProvider", "ToolDefinition", "ChatMessage", "ChatChunk", "MockProvider", "NemotronProvider"]
+__all__ = [
+    "AIProvider",
+    "ToolDefinition",
+    "ChatMessage",
+    "ChatChunk",
+    "MockProvider",
+    "NemotronProvider",
+    "AIProviderError",
+    "AIProviderRateLimitError",
+    "AIProviderTimeoutError",
+    "AIProviderUnavailableError",
+    "AIProviderAuthenticationError",
+    "AIProviderBadRequestError",
+    "is_retryable_error",
+    "map_provider_exception",
+    "get_provider",
+]
 
 
 def get_provider(provider_name: str = "mock") -> AIProvider:

@@ -1,14 +1,27 @@
 """Nemotron AI Provider - OpenAI SDK implementation for NVIDIA NIM/TGI."""
 
 from typing import AsyncGenerator, List, Optional
+import asyncio
+import random
+import logging
 
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionChunk
 
 from app.services.ai_providers.base import AIProvider, ChatMessage, ChatChunk, ToolDefinition
+from app.services.ai_providers.exceptions import (
+    map_provider_exception,
+    AIProviderError,
+    AIProviderRateLimitError,
+    AIProviderTimeoutError,
+    AIProviderUnavailableError,
+    AIProviderAuthenticationError,
+    AIProviderBadRequestError,
+)
 from app.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 class NemotronProvider(AIProvider):
@@ -29,13 +42,24 @@ class NemotronProvider(AIProvider):
             self._client = AsyncOpenAI(
                 base_url=self._api_url,
                 api_key=self._api_key or "dummy-key",
-                timeout=60.0,
+                timeout=settings.AI_REQUEST_TIMEOUT,
             )
         return self._client
 
     async def count_tokens(self, text: str) -> int:
         # Rough approximation
         return len(text) // 4
+
+    def _calculate_backoff(self, attempt: int, retry_after: Optional[int] = None) -> float:
+        """Calculate backoff delay with exponential backoff and jitter."""
+        if retry_after is not None:
+            return float(retry_after)
+
+        base_delay = settings.AI_RETRY_BASE_DELAY
+        max_delay = settings.AI_RETRY_MAX_DELAY
+        delay = min(base_delay * (2 ** attempt), max_delay)
+        # Add jitter: 0.5x to 1.5x
+        return delay * (0.5 + random.random())
 
     async def stream_chat(
         self,
@@ -82,48 +106,92 @@ class NemotronProvider(AIProvider):
             for t in tools
         ]
 
-        try:
-            stream = await client.chat.completions.create(
-                model=self._model,
-                messages=api_messages,
-                tools=api_tools if tools else None,
-                tool_choice=tool_choice if tools else None,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                stream=True,
-                stream_options={"include_usage": True},
-            )
+        max_retries = settings.AI_MAX_RETRIES
+        last_error: Optional[AIProviderError] = None
 
-            last_chunk = None
-            async for chunk in stream:
-                last_chunk = chunk
-                delta = chunk.choices[0].delta if chunk.choices else None
-                if delta:
-                    if delta.content:
-                        yield ChatChunk(type="content", content=delta.content)
-                    if delta.tool_calls:
-                        for tc in delta.tool_calls:
-                            # Convert OpenAI tool call to dict
-                            tool_call_dict = {
-                                "id": tc.id,
-                                "type": "function",
-                                "function": {
-                                    "name": tc.function.name,
-                                    "arguments": tc.function.arguments,
-                                },
-                            }
-                            yield ChatChunk(type="tool_call", tool_call=tool_call_dict)
+        for attempt in range(max_retries + 1):
+            try:
+                stream = await client.chat.completions.create(
+                    model=self._model,
+                    messages=api_messages,
+                    tools=api_tools if tools else None,
+                    tool_choice=tool_choice if tools else None,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    stream=True,
+                    stream_options={"include_usage": True},
+                )
 
-            # Send done chunk with usage if available
-            usage = last_chunk.usage if last_chunk and last_chunk.usage else None
-            yield ChatChunk(type="done", usage={
-                "prompt_tokens": usage.prompt_tokens if usage else 0,
-                "completion_tokens": usage.completion_tokens if usage else 0,
-                "total_tokens": usage.total_tokens if usage else 0,
-            })
+                last_chunk = None
+                async for chunk in stream:
+                    last_chunk = chunk
+                    delta = chunk.choices[0].delta if chunk.choices else None
+                    if delta:
+                        if delta.content:
+                            yield ChatChunk(type="content", content=delta.content)
+                        if delta.tool_calls:
+                            for tc in delta.tool_calls:
+                                tool_call_dict = {
+                                    "id": tc.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tc.function.name,
+                                        "arguments": tc.function.arguments,
+                                    },
+                                }
+                                yield ChatChunk(type="tool_call", tool_call=tool_call_dict)
 
-        except Exception as e:
-            yield ChatChunk(type="error", error=f"Nemotron provider error: {str(e)}")
+                # Send done chunk with usage if available
+                usage = last_chunk.usage if last_chunk and last_chunk.usage else None
+                yield ChatChunk(type="done", usage={
+                    "prompt_tokens": usage.prompt_tokens if usage else 0,
+                    "completion_tokens": usage.completion_tokens if usage else 0,
+                    "total_tokens": usage.total_tokens if usage else 0,
+                })
+                return  # Success - exit the retry loop
+
+            except Exception as e:
+                mapped_error = map_provider_exception(e, provider="nemotron", model=self._model)
+                last_error = mapped_error
+
+                logger.warning(
+                    "provider_error",
+                    extra={
+                        "provider": "nemotron",
+                        "model": self._model,
+                        "attempt": attempt + 1,
+                        "max_retries": max_retries + 1,
+                        "error_type": type(mapped_error).__name__,
+                        "status_code": mapped_error.status_code,
+                        "retry_after": mapped_error.retry_after,
+                    },
+                )
+
+                # Don't retry if this was the last attempt or error is not retryable
+                if attempt >= max_retries or not isinstance(
+                    mapped_error,
+                    (AIProviderRateLimitError, AIProviderTimeoutError, AIProviderUnavailableError)
+                ):
+                    break
+
+                # Calculate and apply backoff
+                delay = self._calculate_backoff(attempt, mapped_error.retry_after)
+                logger.info(
+                    "provider_retry",
+                    extra={
+                        "provider": "nemotron",
+                        "model": self._model,
+                        "attempt": attempt + 1,
+                        "delay_seconds": delay,
+                    },
+                )
+                await asyncio.sleep(delay)
+
+        # All retries exhausted - yield error
+        if last_error:
+            yield ChatChunk(type="error", error=f"Nemotron provider error: {last_error.message}")
+        else:
+            yield ChatChunk(type="error", error="Nemotron provider error: Unknown error after retries")
 
     async def close(self):
         if self._client:
