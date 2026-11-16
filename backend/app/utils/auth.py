@@ -1,8 +1,8 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import Response
-from jose import jwt, JWTError
+from jose import JWTError, jwt
 from pydantic import BaseModel
 
 from app.config import get_settings
@@ -21,7 +21,7 @@ class TokenData(BaseModel):
 
 
 def create_access_token(user_id: UUID, email: str) -> str:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expire = now + timedelta(minutes=settings.AUTH_ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode = {
         "sub": str(user_id),
@@ -34,7 +34,7 @@ def create_access_token(user_id: UUID, email: str) -> str:
 
 
 def create_refresh_token(user_id: UUID, email: str) -> str:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expire = now + timedelta(days=settings.AUTH_REFRESH_TOKEN_EXPIRE_DAYS)
     to_encode = {
         "sub": str(user_id),
@@ -53,8 +53,8 @@ def decode_token(token: str) -> TokenData:
             user_id=UUID(payload["sub"]),
             email=payload["email"],
             token_type=payload["type"],
-            exp=datetime.fromtimestamp(payload["exp"], tz=timezone.utc),
-            iat=datetime.fromtimestamp(payload["iat"], tz=timezone.utc),
+            exp=datetime.fromtimestamp(payload["exp"], tz=UTC),
+            iat=datetime.fromtimestamp(payload["iat"], tz=UTC),
         )
     except JWTError as e:
         raise ValueError(f"Invalid token: {e}")
@@ -120,6 +120,13 @@ def clear_auth_cookies(response: Response) -> None:
     )
     response.delete_cookie(
         key="grokrefresh",
+        secure=secure,
+        samesite=same_site,
+        domain=domain,
+        path="/",
+    )
+    response.delete_cookie(
+        key="grokcsrf",
         secure=secure,
         samesite=same_site,
         domain=domain,

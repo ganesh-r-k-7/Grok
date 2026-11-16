@@ -1,10 +1,11 @@
 import secrets
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from app.utils.errors import ForbiddenError
 from app.config import get_settings
+from app.utils.errors import ForbiddenError
 
 settings = get_settings()
 

@@ -1,8 +1,8 @@
 """Test-specific SQLite dialect that supports PostgreSQL types."""
 from sqlalchemy.dialects.sqlite import base as sqlite_base
 from sqlalchemy.dialects.sqlite import aiosqlite as sqlite_aiosqlite
-from sqlalchemy.types import TypeEngine, BLOB, TEXT
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID, BYTEA, ARRAY
+from sqlalchemy.types import TypeEngine, BLOB, TEXT, ARRAY as GenericARRAY
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID, BYTEA, ARRAY as PG_ARRAY
 from sqlalchemy.sql.compiler import GenericTypeCompiler
 import uuid
 import json
@@ -71,7 +71,7 @@ class SQLiteARRAY(TypeEngine):
     __visit_name__ = "ARRAY"
     cache_ok = True
     
-    def __init__(self, item_type, **kw):
+    def __init__(self, item_type=None, **kw):
         super().__init__(**kw)
         self.item_type = item_type
     
@@ -114,7 +114,8 @@ class CustomSQLiteDialect(sqlite_base.SQLiteDialect):
     colspecs = {
         PG_UUID: SQLiteUUID,
         BYTEA: SQLiteBYTEA,
-        ARRAY: SQLiteARRAY,
+        PG_ARRAY: SQLiteARRAY,
+        GenericARRAY: SQLiteARRAY,
     }
     
     def __init__(self, *args, **kwargs):

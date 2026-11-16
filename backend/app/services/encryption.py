@@ -1,6 +1,7 @@
 """Encryption service - placeholder for Phase 1 implementation."""
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.exceptions import InvalidTag
 import base64
 import os
 

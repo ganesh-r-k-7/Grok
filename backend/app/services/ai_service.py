@@ -24,6 +24,7 @@ from app.services.ai_providers.exceptions import (
     is_retryable_error,
 )
 from app.services.task_tools import TaskTools
+from app.services.calendar_tools import CalendarTools
 from app.utils.errors import NotFoundError, ForbiddenError
 from app.config import get_settings
 
@@ -34,7 +35,8 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROMPT = """You are GROK, a personal AI command center assistant.
 You help users manage their tasks, schedule, and productivity.
 You have access to tools for creating, listing, updating, and deleting tasks.
-Use these tools when the user asks you to perform task-related actions.
+You have read-only access to Google Calendar for listing events, getting event details, and finding free time.
+Use these tools when the user asks you to perform task-related or calendar-related actions.
 Always confirm before deleting tasks.
 Be concise and helpful."""
 
@@ -171,7 +173,7 @@ class AIService:
 
         return context
 
-    async def _execute_tool_call(self, task_tools: TaskTools, tool_call: dict) -> dict:
+    async def _execute_tool_call(self, task_tools: TaskTools, calendar_tools: CalendarTools, tool_call: dict) -> dict:
         """Execute a single tool call and return the result."""
         tool_name = tool_call.get("function", {}).get("name")
         if not tool_name:
@@ -182,7 +184,11 @@ class AIService:
         except json.JSONDecodeError:
             args = {}
 
-        result = await task_tools.execute_tool(tool_name, args)
+        # Route to appropriate tool handler based on tool name prefix
+        if tool_name.startswith("calendar_"):
+            result = await calendar_tools.execute_tool(tool_name, args)
+        else:
+            result = await task_tools.execute_tool(tool_name, args)
         return result
 
     def _map_provider_error_to_http(self, error: AIProviderError) -> tuple[int, str, dict]:
@@ -255,9 +261,10 @@ class AIService:
             system_prompt=SYSTEM_PROMPT,
         )
 
-        # Get task tools for AI
+        # Get tools for AI
         task_tools = TaskTools(self.db, user)
-        tools = task_tools.get_tool_definitions()
+        calendar_tools = CalendarTools(self.db, user)
+        tools = task_tools.get_tool_definitions() + calendar_tools.get_tool_definitions()
 
         # Tool calling loop - feed results back to model
         max_tool_rounds = 3
@@ -299,7 +306,7 @@ class AIService:
 
             # Execute all tool calls from this round
             for tool_call in tool_calls_in_round:
-                result = await self._execute_tool_call(task_tools, tool_call)
+                result = await self._execute_tool_call(task_tools, calendar_tools, tool_call)
 
                 # Add tool result to context for next round
                 tool_call_id = tool_call.get("id")

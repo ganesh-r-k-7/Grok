@@ -11,9 +11,18 @@ export const queryClient = new QueryClient({
 });
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const CSRF_COOKIE_NAME = "grokcsrf";
+const CSRF_HEADER_NAME = "X-CSRF-Token";
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 let isRefreshing = false;
 let refreshPromise: Promise<void> | null = null;
+
+function getCsrfToken(): string | undefined {
+  if (typeof document === "undefined") return undefined;
+  const match = document.cookie.match(new RegExp(`(^| )${CSRF_COOKIE_NAME}=([^;]+)`));
+  return match ? decodeURIComponent(match[2]) : undefined;
+}
 
 async function refreshAccessToken(): Promise<void> {
   if (isRefreshing && refreshPromise) {
@@ -26,6 +35,9 @@ async function refreshAccessToken(): Promise<void> {
       const response = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
         method: "POST",
         credentials: "include",
+        headers: {
+          [CSRF_HEADER_NAME]: getCsrfToken() || "",
+        },
       });
 
       if (!response.ok) {
@@ -45,13 +57,25 @@ export async function apiRequest<T>(
   options: RequestInit = {},
   retryCount = 0
 ): Promise<T> {
+  const method = (options.method || "GET").toUpperCase();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(options.headers as Record<string, string> | undefined),
+  };
+
+  // Add CSRF token for unsafe methods
+  if (!SAFE_METHODS.has(method)) {
+    const csrfToken = getCsrfToken();
+    if (csrfToken) {
+      headers[CSRF_HEADER_NAME] = csrfToken;
+    }
+  }
+
   const response = await fetch(`${API_BASE}/api/v1${endpoint}`, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
-    credentials: "include", // Include cookies
+    method,
+    headers,
+    credentials: "include",
   });
 
   // Handle 401 - try to refresh token once
@@ -214,6 +238,38 @@ export interface ChatResponse {
   message: MessageResponse;
 }
 
+async function apiRequestStream(
+  endpoint: string,
+  data: unknown,
+  retryCount = 0
+): Promise<Response> {
+  const csrfToken = getCsrfToken();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (csrfToken) {
+    headers[CSRF_HEADER_NAME] = csrfToken;
+  }
+
+  const response = await fetch(`${API_BASE}/api/v1${endpoint}`, {
+    method: "POST",
+    headers,
+    credentials: "include",
+    body: JSON.stringify(data),
+  });
+
+  if (response.status === 401 && retryCount === 0 && endpoint !== "/auth/refresh") {
+    try {
+      await refreshAccessToken();
+      return apiRequestStream(endpoint, data, retryCount + 1);
+    } catch {
+      return response;
+    }
+  }
+
+  return response;
+}
+
 // Streaming types
 export interface StreamChunk {
   type: "content" | "tool_call" | "tool_result" | "done" | "error";
@@ -242,19 +298,32 @@ export interface StreamChunk {
   conversation_id?: string;
 }
 
+// Auth/Integrations types
+export interface IntegrationStatus {
+  provider: string;
+  connected: boolean;
+  email?: string;
+  name?: string;
+  last_synced_at?: string;
+}
+
+export interface GoogleConnectResponse {
+  authorization_url: string;
+}
+
+// Auth/Integrations API functions
+export const authApi = {
+  connectGoogle: () => api.post<GoogleConnectResponse>("/auth/google/connect", {}),
+  getGoogleStatus: () => api.get<IntegrationStatus>("/auth/google/status"),
+  disconnectGoogle: () => api.delete<void>("/auth/google/disconnect"),
+};
+
 // AI API functions
 export const aiApi = {
   chat: (data: ChatRequest) => api.post<ChatResponse>("/ai/chat", data),
 
   chatStream: (data: ChatRequest) => {
-    return fetch(`${API_BASE}/api/v1/ai/chat/stream`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      credentials: "include",
-      body: JSON.stringify(data),
-    });
+    return apiRequestStream("/ai/chat/stream", data);
   },
 
   listConversations: (params?: { page?: number; page_size?: number }) => {

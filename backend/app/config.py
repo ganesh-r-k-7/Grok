@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     APP_PORT: int = 8000
     APP_SECRET_KEY: str = Field(..., min_length=32)
     APP_CORS_ORIGINS: List[str] = ["http://localhost:3000"]
+    FRONTEND_URL: str = Field(default="http://localhost:3000", pattern=r"^https?://")
 
     # Database
     DATABASE_URL: str = Field(..., pattern=r"^postgresql\+asyncpg://")
@@ -35,9 +36,7 @@ class Settings(BaseSettings):
         "openid",
         "email",
         "profile",
-        "gmail.readonly",
         "calendar.readonly",
-        "tasks.readonly",
     ]
 
     # Encryption

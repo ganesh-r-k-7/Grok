@@ -16,6 +16,7 @@ const navigation = [
   { name: "Emails", href: "/dashboard/emails", icon: "Mail" },
   { name: "Briefing", href: "/dashboard/briefing", icon: "FileText" },
   { name: "Chat", href: "/dashboard/chat", icon: "MessageSquare" },
+  { name: "Integrations", href: "/dashboard/integrations", icon: "Plug" },
 ];
 
 function getIcon(name: string) {
@@ -48,6 +49,11 @@ function getIcon(name: string) {
     MessageSquare: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h4M8 16h4m-4-8h4m-4 0v12" />
+      </svg>
+    ),
+    Plug: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
       </svg>
     ),
   };
