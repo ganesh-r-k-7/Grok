@@ -1,6 +1,6 @@
 # GROK
 
-Personal AI Command Center — a dashboard that aggregates your calendar, email, and tasks with an AI assistant.
+Personal AI Command Center - a dashboard that aggregates your calendar, email, and tasks with an AI assistant.
 
 ## Architecture
 
@@ -100,12 +100,6 @@ npm run typecheck
 npm run test:ci
 ```
 
-## CI/CD
-
-GitHub Actions workflow runs on every push/PR:
-- Backend: lint (ruff), typecheck (mypy), tests (pytest)
-- Frontend: lint (eslint), typecheck (tsc), tests (vitest)
-- Docker build validation
 
 ## License
 
